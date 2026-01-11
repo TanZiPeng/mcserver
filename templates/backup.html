@@ -252,9 +252,33 @@
                     <div class="config-value" id="webhookStatus">-</div>
                 </div>
             </div>
-            <button class="btn btn-primary" onclick="startBackup()" id="backupBtn">
-                🚀 开始备份
-            </button>
+        </div>
+
+        <!-- 文件选择 -->
+        <div class="card">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="margin: 0;">📁 选择备份文件</h2>
+                <div>
+                    <button class="btn btn-primary" onclick="scanDirectory()" id="scanBtn" style="margin-right: 10px;">
+                        🔍 扫描目录
+                    </button>
+                    <button class="btn btn-primary" onclick="selectAll()" style="margin-right: 10px;">
+                        全选
+                    </button>
+                    <button class="btn btn-primary" onclick="deselectAll()">
+                        取消全选
+                    </button>
+                </div>
+            </div>
+            <div id="fileListContainer">
+                <div class="empty-state">点击"扫描目录"按钮扫描服务器目录</div>
+            </div>
+            <div style="margin-top: 20px;">
+                <button class="btn btn-primary" onclick="startBackup()" id="backupBtn">
+                    🚀 开始备份
+                </button>
+                <span id="selectedCount" style="margin-left: 15px; color: #6b7280; font-size: 14px;"></span>
+            </div>
         </div>
 
         <!-- 备份历史 -->
@@ -391,6 +415,100 @@
             }
         }
 
+        // 扫描目录
+        async function scanDirectory() {
+            const btn = document.getElementById('scanBtn');
+            const container = document.getElementById('fileListContainer');
+            
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 扫描中...';
+            container.innerHTML = '<div class="empty-state">正在扫描目录...</div>';
+            
+            try {
+                const response = await fetch('/api/backup/scan');
+                const data = await response.json();
+                
+                if (data.success) {
+                    renderFileList(data.items);
+                    showToast(`扫描完成，找到 ${data.items.length} 个项目`, 'success');
+                } else {
+                    container.innerHTML = `<div class="empty-state">扫描失败: ${data.error || '未知错误'}</div>`;
+                    showToast('扫描失败: ' + (data.error || '未知错误'), 'error');
+                }
+            } catch (error) {
+                container.innerHTML = `<div class="empty-state">扫描失败: ${error.message}</div>`;
+                showToast('扫描失败: ' + error.message, 'error');
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '🔍 扫描目录';
+            }
+        }
+
+        // 渲染文件列表
+        function renderFileList(items) {
+            const container = document.getElementById('fileListContainer');
+            
+            if (!items || items.length === 0) {
+                container.innerHTML = '<div class="empty-state">目录为空</div>';
+                return;
+            }
+            
+            let html = '<div class="file-list">';
+            items.forEach(item => {
+                const icon = item.type === 'directory' ? '📁' : '📄';
+                const typeClass = item.type === 'directory' ? 'directory' : 'file';
+                const typeText = item.type === 'directory' ? '目录' : '文件';
+                
+                html += `
+                    <div class="file-item">
+                        <input type="checkbox" class="file-checkbox" id="file_${item.name}" 
+                               value="${item.name}" onchange="updateSelectedCount()">
+                        <span class="file-icon">${icon}</span>
+                        <div class="file-info">
+                            <div class="file-name">
+                                ${item.name}
+                                <span class="file-type-badge ${typeClass}">${typeText}</span>
+                            </div>
+                            <div class="file-meta">${item.size_formatted}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            html += '</div>';
+            
+            container.innerHTML = html;
+            updateSelectedCount();
+        }
+
+        // 全选
+        function selectAll() {
+            document.querySelectorAll('.file-checkbox').forEach(cb => {
+                cb.checked = true;
+            });
+            updateSelectedCount();
+        }
+
+        // 取消全选
+        function deselectAll() {
+            document.querySelectorAll('.file-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+            updateSelectedCount();
+        }
+
+        // 更新选中数量
+        function updateSelectedCount() {
+            const checked = document.querySelectorAll('.file-checkbox:checked');
+            const count = checked.length;
+            const countSpan = document.getElementById('selectedCount');
+            
+            if (count === 0) {
+                countSpan.textContent = '未选择任何文件（将备份全部）';
+            } else {
+                countSpan.textContent = `已选择 ${count} 个项目`;
+            }
+        }
+
         // 开始备份
         async function startBackup() {
             if (isBackingUp) {
@@ -398,7 +516,18 @@
                 return;
             }
             
-            if (!confirm('确定要开始备份吗？备份过程可能需要一些时间。')) {
+            // 获取选中的文件/文件夹
+            const checked = document.querySelectorAll('.file-checkbox:checked');
+            const selectedPaths = Array.from(checked).map(cb => cb.value);
+            
+            let confirmMsg = '确定要开始备份吗？备份过程可能需要一些时间。';
+            if (selectedPaths.length > 0) {
+                confirmMsg = `确定要备份选中的 ${selectedPaths.length} 个项目吗？\n\n选中项目：${selectedPaths.join(', ')}`;
+            } else {
+                confirmMsg = '未选择任何文件，将备份全部内容。确定要继续吗？';
+            }
+            
+            if (!confirm(confirmMsg)) {
                 return;
             }
             
@@ -408,7 +537,11 @@
             btn.innerHTML = '<span class="loading"></span> 备份中...';
             
             try {
-                const response = await fetch('/api/backup/start', { method: 'POST' });
+                const response = await fetch('/api/backup/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ selected_paths: selectedPaths })
+                });
                 const data = await response.json();
                 
                 if (data.success) {

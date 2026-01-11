@@ -73,37 +73,64 @@ class BackupManager:
             print(f"发送 webhook 通知失败: {e}")
             return None
     
-    async def execute_backup(self) -> Dict:
-        """执行备份操作"""
+    async def execute_backup(self, selected_paths: list = None) -> Dict:
+        """执行备份操作
+        
+        Args:
+            selected_paths: 要备份的路径列表（相对于 mc_server_path），如果为 None 则备份全部
+        """
         start_time = time.time()
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         backup_id = f"backup_{timestamp}"
         
-        # 构建 rclone 命令
-        # 使用 --transfers 和 --checkers 优化性能
-        # 使用 --skip-links 跳过符号链接（避免锁定问题）
-        # 使用 --exclude 排除临时文件
         remote_path = f"{self.rclone_remote}:{self.bucket_path}/{timestamp}"
         
-        rclone_cmd = [
-            'rclone',
-            'sync',
-            self.mc_server_path,
-            remote_path,
-            '--transfers', '4',      # 并发传输数
-            '--checkers', '8',       # 并发检查数
-            '--skip-links',          # 跳过符号链接
-            '--copy-links',          # 复制链接目标而不是链接本身
-            '--no-update-modtime',   # 不更新修改时间（避免锁定）
-            '--exclude', '*.tmp',
-            '--exclude', '*.log',
-            '--exclude', '*.lock',
-            '--exclude', 'logs/**',  # 排除日志目录（可选）
-            '--exclude', 'crash-reports/**',  # 排除崩溃报告
-            '--progress',           # 显示进度
-            '--stats', '1s',        # 每秒更新统计
-            '-v'                    # 详细输出
-        ]
+        # 如果指定了要备份的路径，使用 include 模式
+        if selected_paths and len(selected_paths) > 0:
+            # 构建多个 rclone 命令，每个路径单独同步
+            backup_tasks = []
+            for path in selected_paths:
+                source_path = os.path.join(self.mc_server_path, path)
+                # 确保路径存在
+                if not os.path.exists(source_path):
+                    continue
+                
+                rclone_cmd = [
+                    'rclone',
+                    'copy',  # 使用 copy 而不是 sync，因为只备份选中的路径
+                    source_path,
+                    f"{self.rclone_remote}:{self.bucket_path}/{timestamp}/{path}",
+                    '--transfers', '4',
+                    '--checkers', '8',
+                    '--skip-links',
+                    '--copy-links',
+                    '--no-update-modtime',
+                    '--progress',
+                    '--stats', '1s',
+                    '-v'
+                ]
+                backup_tasks.append(rclone_cmd)
+        else:
+            # 备份全部，使用原来的逻辑
+            backup_tasks = [[
+                'rclone',
+                'sync',
+                self.mc_server_path,
+                remote_path,
+                '--transfers', '4',
+                '--checkers', '8',
+                '--skip-links',
+                '--copy-links',
+                '--no-update-modtime',
+                '--exclude', '*.tmp',
+                '--exclude', '*.log',
+                '--exclude', '*.lock',
+                '--exclude', 'logs/**',
+                '--exclude', 'crash-reports/**',
+                '--progress',
+                '--stats', '1s',
+                '-v'
+            ]]
         
         backup_record = {
             "id": backup_id,
@@ -112,6 +139,7 @@ class BackupManager:
             "status": "running",
             "remote_path": remote_path,
             "local_path": self.mc_server_path,
+            "selected_paths": selected_paths or [],
             "output": "",
             "error": None,
             "duration": 0,
@@ -123,27 +151,78 @@ class BackupManager:
         self._save_history()
         
         # 发送开始通知
+        paths_info = f"**备份路径**: `{self.mc_server_path}`"
+        if selected_paths and len(selected_paths) > 0:
+            paths_info += f"\n**选中路径**: {', '.join(selected_paths)}"
+        else:
+            paths_info += "\n**备份模式**: 全部备份"
+        
         await self.send_webhook_notification(
             "备份任务开始",
-            f"**备份路径**: `{self.mc_server_path}`\n**目标**: `{remote_path}`\n**备份ID**: `{backup_id}`",
+            f"{paths_info}\n**目标**: `{remote_path}`\n**备份ID**: `{backup_id}`",
             "info"
         )
         
         try:
-            # 执行 rclone 命令
-            process = await asyncio.create_subprocess_exec(
-                *rclone_cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
+            # 执行所有备份任务
+            all_output = ""
+            all_error_output = ""
+            total_files = 0
+            total_bytes = 0
+            all_success = True
             
-            stdout, stderr = await process.communicate()
+            for rclone_cmd in backup_tasks:
+                # 执行 rclone 命令
+                process = await asyncio.create_subprocess_exec(
+                    *rclone_cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                
+                stdout, stderr = await process.communicate()
+                
+                output = stdout.decode('utf-8', errors='ignore')
+                error_output = stderr.decode('utf-8', errors='ignore')
+                
+                all_output += output + "\n"
+                if error_output:
+                    all_error_output += error_output + "\n"
+                
+                if process.returncode != 0:
+                    all_success = False
+                
+                # 解析每个任务的统计信息
+                if output:
+                    import re
+                    lines = output.split('\n')
+                    for line in lines:
+                        if 'Transferred:' in line:
+                            file_match = re.search(r'Transferred:\s*(\d+)', line)
+                            if file_match:
+                                try:
+                                    total_files += int(file_match.group(1))
+                                except:
+                                    pass
+                            
+                            size_match = re.search(r'(\d+\.?\d*)\s*(B|KB|MB|GB|TB)', line, re.IGNORECASE)
+                            if size_match:
+                                try:
+                                    size_value = float(size_match.group(1))
+                                    size_unit = size_match.group(2).upper()
+                                    multipliers = {
+                                        'B': 1, 'KB': 1024, 'MB': 1024 * 1024,
+                                        'GB': 1024 * 1024 * 1024, 'TB': 1024 * 1024 * 1024 * 1024
+                                    }
+                                    total_bytes += int(size_value * multipliers.get(size_unit, 1))
+                                except:
+                                    pass
+                            break
             
             end_time = time.time()
             duration = round(end_time - start_time, 2)
             
-            output = stdout.decode('utf-8', errors='ignore')
-            error_output = stderr.decode('utf-8', errors='ignore')
+            output = all_output
+            error_output = all_error_output
             
             # 解析 rclone 输出，提取统计信息
             files_transferred = 0
@@ -184,20 +263,20 @@ class BackupManager:
                                 pass
                         break
             
-            if process.returncode == 0:
+            if all_success:
                 backup_record.update({
                     "status": "success",
                     "output": output,
                     "duration": duration,
-                    "files_transferred": files_transferred,
-                    "bytes_transferred": bytes_transferred,
+                    "files_transferred": total_files,
+                    "bytes_transferred": total_bytes,
                     "end_time": datetime.now().isoformat()
                 })
                 
                 # 发送成功通知
                 await self.send_webhook_notification(
                     "备份任务完成",
-                    f"**备份ID**: `{backup_id}`\n**状态**: ✅ 成功\n**耗时**: {duration} 秒\n**传输文件数**: {files_transferred}\n**传输数据量**: {self._format_bytes(bytes_transferred)}\n**目标路径**: `{remote_path}`",
+                    f"**备份ID**: `{backup_id}`\n**状态**: ✅ 成功\n**耗时**: {duration} 秒\n**传输文件数**: {total_files}\n**传输数据量**: {self._format_bytes(total_bytes)}\n**目标路径**: `{remote_path}`",
                     "success"
                 )
             else:

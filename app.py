@@ -3,7 +3,7 @@ import os
 import subprocess
 import time
 from typing import Optional
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 import docker
 from docker.errors import DockerException, NotFound, APIError
@@ -345,12 +345,16 @@ async def backup_page():
         return HTMLResponse(content="<h1>错误: 找不到backup.html文件</h1>", status_code=404)
 
 @app.post("/api/backup/start")
-async def start_backup(background_tasks: BackgroundTasks):
+async def start_backup(background_tasks: BackgroundTasks, request: Request):
     """启动备份任务"""
     try:
+        # 获取要备份的路径列表
+        body = await request.json()
+        selected_paths = body.get("selected_paths", []) if isinstance(body, dict) else []
+        
         # 在后台执行备份（不等待完成）
         async def run_backup():
-            await backup_manager.execute_backup()
+            await backup_manager.execute_backup(selected_paths=selected_paths)
         
         background_tasks.add_task(run_backup)
         return {"success": True, "message": "备份任务已启动，正在后台执行"}
@@ -378,6 +382,73 @@ async def get_backup_detail(backup_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/backup/scan")
+async def scan_backup_directory():
+    """扫描备份目录，返回最外层的文件和文件夹列表"""
+    try:
+        backup_config = config.get('backup', {})
+        mc_server_path = backup_config.get('mc_server_path', '/home/webdev/mcserver')
+        
+        if not os.path.exists(mc_server_path):
+            return {"success": False, "error": f"目录不存在: {mc_server_path}"}
+        
+        items = []
+        try:
+            # 只扫描最外层
+            for item in os.listdir(mc_server_path):
+                item_path = os.path.join(mc_server_path, item)
+                # 跳过隐藏文件
+                if item.startswith('.'):
+                    continue
+                
+                is_dir = os.path.isdir(item_path)
+                size = 0
+                if not is_dir:
+                    try:
+                        size = os.path.getsize(item_path)
+                    except:
+                        pass
+                else:
+                    # 如果是目录，尝试计算总大小（可选，可能较慢）
+                    try:
+                        for root, dirs, files in os.walk(item_path):
+                            for file in files:
+                                try:
+                                    size += os.path.getsize(os.path.join(root, file))
+                                except:
+                                    pass
+                    except:
+                        pass
+                
+                items.append({
+                    "name": item,
+                    "type": "directory" if is_dir else "file",
+                    "size": size,
+                    "size_formatted": _format_bytes(size)
+                })
+            
+            # 按类型和名称排序：目录在前，然后按名称排序
+            items.sort(key=lambda x: (x["type"] != "directory", x["name"].lower()))
+            
+        except PermissionError:
+            return {"success": False, "error": f"没有权限访问目录: {mc_server_path}"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+        
+        return {"success": True, "path": mc_server_path, "items": items}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def _format_bytes(bytes: int) -> str:
+    """格式化字节数为可读格式"""
+    if bytes == 0:
+        return "0 B"
+    for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
+        if bytes < 1024.0:
+            return f"{bytes:.2f} {unit}"
+        bytes /= 1024.0
+    return f"{bytes:.2f} PB"
 
 if __name__ == "__main__":
     import uvicorn

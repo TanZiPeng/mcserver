@@ -6,11 +6,11 @@
   "minecraft": {
     "rcon_host": "localhost",
     "rcon_port": 25575,
-    "rcon_password": "your_rcon_password_here"
+    "rcon_password": ""
   },
   "server": {
     "host": "0.0.0.0",
-    "port": 8000,
+    "port": 5000,
     "refresh_interval": 5
   },
   "backup": {
