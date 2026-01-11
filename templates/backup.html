@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>备份与同步管理</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: #f3f4f6;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #111827;
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+
+        .back-link {
+            text-decoration: none;
+            color: #6b7280;
+            font-size: 14px;
+            display: inline-block;
+            margin-bottom: 10px;
+        }
+
+        .back-link:hover {
+            color: #2563eb;
+        }
+
+        .card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .card h2 {
+            color: #111827;
+            font-size: 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-success {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .status-error {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .status-running {
+            background: #dbeafe;
+            color: #1e40af;
+        }
+
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .history-table th,
+        .history-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+
+        .history-table th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #374151;
+            font-size: 14px;
+        }
+
+        .history-table td {
+            color: #6b7280;
+            font-size: 14px;
+        }
+
+        .history-table tr:hover {
+            background: #f9fafb;
+        }
+
+        .config-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .config-label {
+            font-size: 12px;
+            color: #6b7280;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+
+        .config-value {
+            font-size: 14px;
+            color: #111827;
+            padding: 8px 12px;
+            background: #f9fafb;
+            border-radius: 6px;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-left: 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .toast {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 1000;
+            animation: slideIn 0.3s ease;
+        }
+
+        .toast.success {
+            border-left: 4px solid #10b981;
+        }
+
+        .toast.error {
+            border-left: 4px solid #ef4444;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #9ca3af;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <a href="/" class="back-link">← 返回主页</a>
+            <h1>📦 备份与同步管理</h1>
+        </div>
+
+        <!-- 配置信息 -->
+        <div class="card">
+            <h2>⚙️ 备份配置</h2>
+            <div class="config-grid">
+                <div class="config-item">
+                    <div class="config-label">服务器路径</div>
+                    <div class="config-value" id="mcServerPath">-</div>
+                </div>
+                <div class="config-item">
+                    <div class="config-label">Rclone 远程</div>
+                    <div class="config-value" id="rcloneRemote">-</div>
+                </div>
+                <div class="config-item">
+                    <div class="config-label">存储桶路径</div>
+                    <div class="config-value" id="bucketPath">-</div>
+                </div>
+                <div class="config-item">
+                    <div class="config-label">Webhook 状态</div>
+                    <div class="config-value" id="webhookStatus">-</div>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="startBackup()" id="backupBtn">
+                🚀 开始备份
+            </button>
+        </div>
+
+        <!-- 备份历史 -->
+        <div class="card">
+            <h2>📋 备份历史</h2>
+            <div id="historyContainer">
+                <div class="empty-state">加载中...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let isBackingUp = false;
+
+        // 显示提示消息
+        function showToast(message, type = 'success') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.remove();
+            }, 3000);
+        }
+
+        // 格式化时间
+        function formatTime(isoString) {
+            if (!isoString) return '-';
+            const date = new Date(isoString);
+            return date.toLocaleString('zh-CN');
+        }
+
+        // 格式化持续时间
+        function formatDuration(seconds) {
+            if (!seconds) return '-';
+            if (seconds < 60) return `${seconds}秒`;
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}分${secs}秒`;
+        }
+
+        // 格式化字节数
+        function formatBytes(bytes) {
+            if (!bytes || bytes === 0) return '-';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let size = bytes;
+            let unitIndex = 0;
+            while (size >= 1024 && unitIndex < units.length - 1) {
+                size /= 1024;
+                unitIndex++;
+            }
+            return `${size.toFixed(2)} ${units[unitIndex]}`;
+        }
+
+        // 加载配置
+        async function loadConfig() {
+            try {
+                const response = await fetch('/api/config');
+                const data = await response.json();
+                
+                const backupConfig = data.backup || {};
+                document.getElementById('mcServerPath').textContent = backupConfig.mc_server_path || '-';
+                document.getElementById('rcloneRemote').textContent = backupConfig.rclone_remote || '-';
+                document.getElementById('bucketPath').textContent = backupConfig.bucket_path || '-';
+                document.getElementById('webhookStatus').textContent = backupConfig.webhook_url ? '✅ 已配置' : '❌ 未配置';
+            } catch (error) {
+                console.error('加载配置失败:', error);
+            }
+        }
+
+        // 加载备份历史
+        async function loadHistory() {
+            try {
+                const response = await fetch('/api/backup/history?limit=20');
+                const data = await response.json();
+                
+                const container = document.getElementById('historyContainer');
+                
+                if (!data.history || data.history.length === 0) {
+                    container.innerHTML = '<div class="empty-state">暂无备份记录</div>';
+                    return;
+                }
+                
+                let html = `
+                    <table class="history-table">
+                        <thead>
+                            <tr>
+                                <th>备份ID</th>
+                                <th>开始时间</th>
+                                <th>状态</th>
+                                <th>耗时</th>
+                                <th>文件数</th>
+                                <th>数据量</th>
+                                <th>操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                data.history.forEach(backup => {
+                    const statusClass = backup.status === 'success' ? 'status-success' : 
+                                      backup.status === 'error' ? 'status-error' : 
+                                      'status-running';
+                    const statusText = backup.status === 'success' ? '成功' : 
+                                      backup.status === 'error' ? '失败' : 
+                                      '运行中';
+                    
+                    html += `
+                        <tr>
+                            <td>${backup.id}</td>
+                            <td>${formatTime(backup.start_time)}</td>
+                            <td><span class="status-badge ${statusClass}">${statusText}</span></td>
+                            <td>${formatDuration(backup.duration)}</td>
+                            <td>${backup.files_transferred || '-'}</td>
+                            <td>${formatBytes(backup.bytes_transferred)}</td>
+                            <td>
+                                <button class="btn btn-primary" style="padding: 6px 12px; font-size: 12px;" 
+                                        onclick="viewBackupDetail('${backup.id}')">查看详情</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                
+                html += `
+                        </tbody>
+                    </table>
+                `;
+                
+                container.innerHTML = html;
+            } catch (error) {
+                console.error('加载备份历史失败:', error);
+                document.getElementById('historyContainer').innerHTML = 
+                    '<div class="empty-state">加载失败: ' + error.message + '</div>';
+            }
+        }
+
+        // 开始备份
+        async function startBackup() {
+            if (isBackingUp) {
+                showToast('备份任务正在进行中，请稍候...', 'error');
+                return;
+            }
+            
+            if (!confirm('确定要开始备份吗？备份过程可能需要一些时间。')) {
+                return;
+            }
+            
+            isBackingUp = true;
+            const btn = document.getElementById('backupBtn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 备份中...';
+            
+            try {
+                const response = await fetch('/api/backup/start', { method: 'POST' });
+                const data = await response.json();
+                
+                if (data.success) {
+                    showToast('备份任务已启动，请查看备份历史', 'success');
+                    // 等待2秒后刷新历史记录
+                    setTimeout(() => {
+                        loadHistory();
+                        isBackingUp = false;
+                        btn.disabled = false;
+                        btn.innerHTML = '🚀 开始备份';
+                    }, 2000);
+                } else {
+                    throw new Error(data.message || '启动备份失败');
+                }
+            } catch (error) {
+                showToast('启动备份失败: ' + error.message, 'error');
+                isBackingUp = false;
+                btn.disabled = false;
+                btn.innerHTML = '🚀 开始备份';
+            }
+        }
+
+        // 查看备份详情
+        async function viewBackupDetail(backupId) {
+            try {
+                const response = await fetch(`/api/backup/${backupId}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    const backup = data.backup;
+                    let detail = `
+备份ID: ${backup.id}\n
+开始时间: ${formatTime(backup.start_time)}\n
+结束时间: ${formatTime(backup.end_time)}\n
+状态: ${backup.status}\n
+耗时: ${formatDuration(backup.duration)}\n
+远程路径: ${backup.remote_path}\n
+本地路径: ${backup.local_path}\n
+`;
+                    
+                    if (backup.files_transferred) {
+                        detail += `传输文件数: ${backup.files_transferred}\n`;
+                    }
+                    if (backup.bytes_transferred) {
+                        detail += `传输数据量: ${formatBytes(backup.bytes_transferred)}\n`;
+                    }
+                    if (backup.error) {
+                        detail += `\n错误信息:\n${backup.error}\n`;
+                    }
+                    if (backup.output) {
+                        detail += `\n输出信息:\n${backup.output.substring(0, 500)}...\n`;
+                    }
+                    
+                    alert(detail);
+                } else {
+                    throw new Error(data.message || '获取备份详情失败');
+                }
+            } catch (error) {
+                showToast('获取备份详情失败: ' + error.message, 'error');
+            }
+        }
+
+        // 初始化
+        async function init() {
+            await loadConfig();
+            await loadHistory();
+            
+            // 每10秒刷新一次历史记录
+            setInterval(() => {
+                if (!isBackingUp) {
+                    loadHistory();
+                }
+            }, 10000);
+        }
+
+        init();
+    </script>
+</body>
+</html>

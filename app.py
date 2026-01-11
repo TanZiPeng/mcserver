@@ -348,9 +348,12 @@ async def backup_page():
 async def start_backup(background_tasks: BackgroundTasks):
     """启动备份任务"""
     try:
-        # 在后台执行备份
-        result = await backup_manager.execute_backup()
-        return {"success": True, "backup_id": result.get("id"), "message": "备份任务已启动"}
+        # 在后台执行备份（不等待完成）
+        async def run_backup():
+            await backup_manager.execute_backup()
+        
+        background_tasks.add_task(run_backup)
+        return {"success": True, "message": "备份任务已启动，正在后台执行"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

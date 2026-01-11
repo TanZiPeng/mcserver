@@ -36,6 +36,9 @@ config.json
 # 日志
 *.log
 
+# 备份历史
+backup_history.json
+
 # 操作系统
 .DS_Store
 Thumbs.db

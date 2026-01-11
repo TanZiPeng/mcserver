@@ -52,15 +52,11 @@ class BackupManager:
             "info": "ℹ️"
         }
         
+        # 企业微信 webhook 消息格式
         message = {
             "msgtype": "markdown",
             "markdown": {
-                "content": f"""# {status_emoji.get(status, "ℹ️")} {title}
-                
-{content}
-                
-**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-"""
+                "content": f"# {status_emoji.get(status, 'ℹ️')} {title}\n\n{content}\n\n**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             }
         }
         
@@ -94,13 +90,16 @@ class BackupManager:
             'sync',
             self.mc_server_path,
             remote_path,
-            '--transfers', '4',  # 并发传输数
-            '--checkers', '8',   # 并发检查数
-            '--skip-links',      # 跳过符号链接
+            '--transfers', '4',      # 并发传输数
+            '--checkers', '8',       # 并发检查数
+            '--skip-links',          # 跳过符号链接
+            '--copy-links',          # 复制链接目标而不是链接本身
+            '--no-update-modtime',   # 不更新修改时间（避免锁定）
             '--exclude', '*.tmp',
             '--exclude', '*.log',
             '--exclude', '*.lock',
             '--exclude', 'logs/**',  # 排除日志目录（可选）
+            '--exclude', 'crash-reports/**',  # 排除崩溃报告
             '--progress',           # 显示进度
             '--stats', '1s',        # 每秒更新统计
             '-v'                    # 详细输出
@@ -151,35 +150,39 @@ class BackupManager:
             bytes_transferred = 0
             
             if output:
+                import re
                 # 尝试从输出中提取统计信息
+                # rclone 输出格式示例: "Transferred:   123 / 456, 1.234 GB, 4.567 MB/s, ETA 0s"
                 lines = output.split('\n')
                 for line in lines:
+                    # 匹配 "Transferred:" 行
                     if 'Transferred:' in line:
-                        # 解析传输的文件数和字节数
-                        parts = line.split()
-                        for i, part in enumerate(parts):
-                            if part == 'Transferred:':
-                                if i + 1 < len(parts):
-                                    try:
-                                        files_transferred = int(parts[i + 1])
-                                    except:
-                                        pass
-                                if i + 3 < len(parts):
-                                    # 尝试解析字节数
-                                    bytes_str = parts[i + 3]
-                                    # 处理类似 "1.234M" 的格式
-                                    if 'M' in bytes_str:
-                                        bytes_transferred = int(float(bytes_str.replace('M', '')) * 1024 * 1024)
-                                    elif 'G' in bytes_str:
-                                        bytes_transferred = int(float(bytes_str.replace('G', '')) * 1024 * 1024 * 1024)
-                                    elif 'K' in bytes_str:
-                                        bytes_transferred = int(float(bytes_str.replace('K', '')) * 1024)
-                                    else:
-                                        try:
-                                            bytes_transferred = int(bytes_str)
-                                        except:
-                                            pass
-                            break
+                        # 提取文件数: "Transferred:   123 / 456"
+                        file_match = re.search(r'Transferred:\s*(\d+)', line)
+                        if file_match:
+                            try:
+                                files_transferred = int(file_match.group(1))
+                            except:
+                                pass
+                        
+                        # 提取字节数: "1.234 GB" 或 "1.234 MB" 等
+                        size_match = re.search(r'(\d+\.?\d*)\s*(B|KB|MB|GB|TB)', line, re.IGNORECASE)
+                        if size_match:
+                            try:
+                                size_value = float(size_match.group(1))
+                                size_unit = size_match.group(2).upper()
+                                
+                                multipliers = {
+                                    'B': 1,
+                                    'KB': 1024,
+                                    'MB': 1024 * 1024,
+                                    'GB': 1024 * 1024 * 1024,
+                                    'TB': 1024 * 1024 * 1024 * 1024
+                                }
+                                bytes_transferred = int(size_value * multipliers.get(size_unit, 1))
+                            except:
+                                pass
+                        break
             
             if process.returncode == 0:
                 backup_record.update({
@@ -194,12 +197,7 @@ class BackupManager:
                 # 发送成功通知
                 await self.send_webhook_notification(
                     "备份任务完成",
-                    f"""**备份ID**: `{backup_id}`
-**状态**: ✅ 成功
-**耗时**: {duration} 秒
-**传输文件数**: {files_transferred}
-**传输数据量**: {self._format_bytes(bytes_transferred)}
-**目标路径**: `{remote_path}`""",
+                    f"**备份ID**: `{backup_id}`\n**状态**: ✅ 成功\n**耗时**: {duration} 秒\n**传输文件数**: {files_transferred}\n**传输数据量**: {self._format_bytes(bytes_transferred)}\n**目标路径**: `{remote_path}`",
                     "success"
                 )
             else:
@@ -212,15 +210,10 @@ class BackupManager:
                 })
                 
                 # 发送失败通知
+                error_preview = error_output[:500] if error_output else "未知错误"
                 await self.send_webhook_notification(
                     "备份任务失败",
-                    f"""**备份ID**: `{backup_id}`
-**状态**: ❌ 失败
-**耗时**: {duration} 秒
-**错误信息**: 
-```
-{error_output[:500]}
-```""",
+                    f"**备份ID**: `{backup_id}`\n**状态**: ❌ 失败\n**耗时**: {duration} 秒\n**错误信息**: \n```\n{error_preview}\n```",
                     "error"
                 )
             
@@ -255,12 +248,7 @@ class BackupManager:
             # 发送错误通知
             await self.send_webhook_notification(
                 "备份任务异常",
-                f"""**备份ID**: `{backup_id}`
-**状态**: ❌ 异常
-**错误信息**: 
-```
-{error_msg}
-```""",
+                f"**备份ID**: `{backup_id}`\n**状态**: ❌ 异常\n**错误信息**: \n```\n{error_msg}\n```",
                 "error"
             )
             
