@@ -6,7 +6,8 @@
   "minecraft": {
     "rcon_host": "localhost",
     "rcon_port": 25575,
-    "rcon_password": ""
+    "rcon_password": "",
+    "command_method": "docker_attach"
   },
   "server": {
     "host": "0.0.0.0",

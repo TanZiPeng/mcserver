@@ -48,8 +48,8 @@
 
         .header {
             margin-bottom: 3rem;
-            text-align: left; /* 这种风格左对齐更显高级，如果喜欢居中可改为 center */
-            padding-left: 0.5rem;
+            text-align: center; /* 居中对齐更适合两个模块的布局 */
+            padding-left: 0;
         }
 
         .header h1 {
@@ -68,14 +68,16 @@
         /* 核心网格布局 */
         .nav-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr); /* 强制三列 */
-            gap: 1.5rem;
+            grid-template-columns: repeat(2, 1fr); /* 两列布局 */
+            gap: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
         }
 
         .nav-card {
             background: var(--card-bg);
             border-radius: 24px; /* 大圆角 */
-            padding: 2rem;
+            padding: 2.5rem;
             text-decoration: none;
             border: var(--card-border);
             box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05); /* 默认微弱阴影 */
@@ -83,6 +85,7 @@
             flex-direction: column;
             align-items: flex-start;
             height: 100%;
+            min-height: 280px; /* 确保卡片有足够高度 */
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
@@ -94,36 +97,48 @@
 
         /* 图标容器 */
         .icon-box {
-            width: 52px;
-            height: 52px;
-            border-radius: 16px;
+            width: 64px;
+            height: 64px;
+            border-radius: 20px;
             background: #f9fafb;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 1.5rem;
+            font-size: 1.75rem;
             color: #374151;
-            margin-bottom: 1.5rem;
-            transition: background 0.3s, color 0.3s;
+            margin-bottom: 2rem;
+            transition: all 0.3s;
         }
 
         /* 悬停时图标颜色变化 */
         .nav-card:hover .icon-box {
+            transform: scale(1.05);
+        }
+
+        /* 控制台卡片悬停效果 */
+        .nav-card:nth-child(1):hover .icon-box {
             background: #eff6ff;
-            color: #2563eb; /* 变成蓝色 */
+            color: #2563eb;
+        }
+
+        /* 备份卡片悬停效果 */
+        .nav-card:nth-child(2):hover .icon-box {
+            background: #f0fdf4;
+            color: #16a34a;
         }
 
         .nav-title {
-            font-size: 1.25rem;
+            font-size: 1.375rem;
             font-weight: 700;
             color: var(--text-primary);
-            margin-bottom: 0.75rem;
+            margin-bottom: 1rem;
         }
 
         .nav-description {
-            font-size: 0.95rem;
+            font-size: 1rem;
             color: var(--text-secondary);
             line-height: 1.6;
+            flex-grow: 1;
         }
 
         /* 动画关键帧 */
@@ -136,6 +151,7 @@
         @media (max-width: 850px) {
             .nav-grid {
                 grid-template-columns: 1fr; /* 变成单列 */
+                max-width: 500px;
             }
             .header {
                 text-align: center;
@@ -144,7 +160,7 @@
             .nav-card {
                 align-items: center;
                 text-align: center;
-                padding: 1.5rem;
+                padding: 2rem 1.5rem;
             }
         }
     </style>
@@ -153,8 +169,8 @@
 
     <div class="container">
         <div class="header">
-            <h1>Server Management</h1>
-            <p>欢迎回来，请选择要操作的模块</p>
+            <h1>Minecraft Server</h1>
+            <p>选择要操作的模块</p>
         </div>
 
         <div class="nav-grid">
@@ -163,23 +179,15 @@
                     <i class="ri-terminal-box-line"></i>
                 </div>
                 <div class="nav-title">服务器控制台</div>
-                <div class="nav-description">实时监控日志，发送 OP 指令，查看服务器运行状态与性能。</div>
-            </a>
-
-            <a href="/dashboard" class="nav-card">
-                <div class="icon-box">
-                    <i class="ri-dashboard-3-line"></i>
-                </div>
-                <div class="nav-title">服务器监控</div>
-                <div class="nav-description">查看 CPU、内存使用情况，在线玩家信息，容器运行状态。</div>
+                <div class="nav-description">实时监控服务器日志，发送管理指令，查看服务器运行状态与性能数据。</div>
             </a>
 
             <a href="/backup" class="nav-card">
                 <div class="icon-box">
-                    <i class="ri-hard-drive-2-line"></i>
+                    <i class="ri-cloud-line"></i>
                 </div>
-                <div class="nav-title">备份与同步</div>
-                <div class="nav-description">管理世界存档快照，一键执行数据同步到 Cloudflare R2，确保数据安全。</div>
+                <div class="nav-title">同步备份</div>
+                <div class="nav-description">管理世界存档快照，一键执行数据同步到云存储，确保服务器数据安全。</div>
             </a>
         </div>
     </div>

@@ -5,10 +5,11 @@
 ## 功能特性
 
 - 🎮 **容器管理**: 启动、停止、重启 Minecraft 服务器容器
-- 💻 **命令执行**: 通过 Web 界面执行 Minecraft 服务器命令
+- 💻 **命令执行**: 支持两种方式执行 Minecraft 服务器命令（Docker Attach 和 RCON）
 - 📊 **资源监控**: 实时显示 CPU 和内存使用情况
 - 👥 **玩家管理**: 显示在线玩家列表和人数统计
-- ⚙️ **配置管理**: 统一管理容器名称、RCON 配置等信息
+- ⚙️ **配置管理**: 统一管理容器名称、命令执行方式、RCON 配置等信息
+- 💾 **备份管理**: 支持自动备份和云存储同步
 
 ## 系统要求
 
@@ -35,9 +36,10 @@ pip install -r requirements.txt
     "socket_path": "/var/run/docker.sock"  // Linux系统，Windows会自动检测
   },
   "minecraft": {
-    "rcon_host": "localhost",              // RCON主机地址
-    "rcon_port": 25575,                    // RCON端口
-    "rcon_password": "your_password"       // RCON密码
+    "command_method": "docker_attach",     // 命令执行方式: "docker_attach" 或 "rcon"
+    "rcon_host": "localhost",              // RCON主机地址（仅RCON模式需要）
+    "rcon_port": 25575,                    // RCON端口（仅RCON模式需要）
+    "rcon_password": "your_password"       // RCON密码（仅RCON模式需要）
   },
   "server": {
     "host": "0.0.0.0",                     // Web服务监听地址
@@ -47,7 +49,21 @@ pip install -r requirements.txt
 }
 ```
 
-### 3. 启用 RCON（如果尚未启用）
+### 3. 配置命令执行方式
+
+本管理面板支持两种命令执行方式：
+
+#### Docker Attach 方式（推荐新手）
+- **优点**: 无需额外配置，直接向容器发送命令
+- **缺点**: 无法获取命令执行结果，玩家列表功能有限
+- **配置**: 在 `config.json` 中设置 `"command_method": "docker_attach"`
+
+#### RCON 方式（推荐高级用户）
+- **优点**: 完整的命令执行和结果获取，支持完整的玩家列表功能
+- **缺点**: 需要配置 RCON
+- **配置**: 在 `config.json` 中设置 `"command_method": "rcon"`
+
+### 4. 启用 RCON（仅 RCON 模式需要）
 
 确保你的 Minecraft 服务器已启用 RCON。在 `server.properties` 文件中设置：
 
@@ -57,7 +73,7 @@ rcon.port=25575
 rcon.password=your_password
 ```
 
-### 4. 运行服务
+### 5. 运行服务
 
 ```bash
 python app.py
@@ -69,7 +85,7 @@ python app.py
 uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-### 5. 访问管理面板
+### 6. 访问管理面板
 
 打开浏览器访问：`http://localhost:8000`
 
@@ -101,8 +117,9 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 在配置管理区域可以：
 - 查看当前配置
+- 选择命令执行方式（Docker Attach 或 RCON）
 - 修改容器名称
-- 更新 RCON 设置
+- 更新 RCON 设置（仅 RCON 模式需要）
 - 保存配置（需要重启服务生效）
 
 ## Docker 使用说明
@@ -130,12 +147,24 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 ### 3. 命令执行失败
 
+#### Docker Attach 模式
+- 确保容器正在运行
+- 检查 Minecraft 服务器是否在 screen 或 tmux 会话中运行
+- 查看服务器日志确认命令是否被执行
+- 如果问题持续，建议切换到 RCON 模式
+
+#### RCON 模式
 - 确保容器正在运行
 - 检查 RCON 是否已启用并配置正确
-- 某些 Minecraft 镜像可能使用不同的命令执行方式，请参考镜像文档
+- 确保安装了 `mcrcon` 库：`pip install mcrcon`
+- 验证 RCON 端口是否正确暴露
 
 ### 4. 无法获取玩家信息
 
+#### Docker Attach 模式
+- 此模式下玩家列表功能有限，建议切换到 RCON 模式获取完整功能
+
+#### RCON 模式
 - 确保 RCON 配置正确
 - 检查服务器是否支持 `list` 命令
 - 查看浏览器控制台是否有错误信息
@@ -155,6 +184,10 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 2. 使用强密码保护 RCON
 3. 在生产环境中考虑添加身份验证
 4. 定期备份服务器数据
+
+## 命令执行方式详细说明
+
+详细的命令执行方式说明请参考：[COMMAND_METHODS.md](COMMAND_METHODS.md)
 
 ## 许可证
 

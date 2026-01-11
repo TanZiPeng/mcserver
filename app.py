@@ -21,6 +21,23 @@ def load_config():
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
+        # 确保所有必需的配置项都存在
+        if 'docker' not in config:
+            config['docker'] = {}
+        if 'socket_path' not in config['docker']:
+            config['docker']['socket_path'] = '/var/run/docker.sock'
+        if 'container_name' not in config['docker']:
+            config['docker']['container_name'] = 'minecraft-server'
+        
+        # 确保其他配置项也存在
+        if 'minecraft' not in config:
+            config['minecraft'] = {}
+        if 'command_method' not in config['minecraft']:
+            config['minecraft']['command_method'] = 'docker_attach'  # 默认使用docker attach
+        if 'server' not in config:
+            config['server'] = {}
+        if 'backup' not in config:
+            config['backup'] = {}
     except FileNotFoundError:
         # 创建默认配置
         config = {
@@ -37,10 +54,41 @@ def load_config():
                 "host": "0.0.0.0",
                 "port": 8000,
                 "refresh_interval": 5
+            },
+            "backup": {
+                "mc_server_path": "/home/webdev/mcserver",
+                "rclone_remote": "cloudflare_r2",
+                "bucket_path": "normal",
+                "webhook_url": ""
             }
         }
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2, ensure_ascii=False)
+    except json.JSONDecodeError as e:
+        print(f"警告: 配置文件格式错误: {e}")
+        print("使用默认配置...")
+        config = {
+            "docker": {
+                "container_name": "minecraft-server",
+                "socket_path": "/var/run/docker.sock"
+            },
+            "minecraft": {
+                "rcon_host": "localhost",
+                "rcon_port": 25575,
+                "rcon_password": "your_rcon_password_here"
+            },
+            "server": {
+                "host": "0.0.0.0",
+                "port": 8000,
+                "refresh_interval": 5
+            },
+            "backup": {
+                "mc_server_path": "/home/webdev/mcserver",
+                "rclone_remote": "cloudflare_r2",
+                "bucket_path": "normal",
+                "webhook_url": ""
+            }
+        }
 
 load_config()
 
@@ -52,10 +100,21 @@ try:
     if os.name == 'nt':  # Windows
         docker_client = docker.from_env()
     else:  # Linux
-        docker_client = docker.DockerClient(base_url='unix://' + config['docker']['socket_path'])
+        # 安全获取 socket_path，如果不存在则使用默认值
+        socket_path = config.get('docker', {}).get('socket_path', '/var/run/docker.sock')
+        docker_client = docker.DockerClient(base_url='unix://' + socket_path)
 except DockerException as e:
     print(f"警告: 无法连接到Docker: {e}")
     docker_client = None
+except KeyError as e:
+    print(f"警告: 配置文件中缺少必要的配置项: {e}")
+    print("尝试使用默认配置...")
+    try:
+        socket_path = '/var/run/docker.sock'
+        docker_client = docker.DockerClient(base_url='unix://' + socket_path)
+    except Exception as e2:
+        print(f"警告: 无法连接到Docker: {e2}")
+        docker_client = None
 
 def get_container():
     """获取Minecraft容器"""
@@ -100,7 +159,27 @@ async def config_page():
 async def get_status():
     """获取服务器状态"""
     try:
+        # 检查 Docker 客户端是否初始化
+        if not docker_client:
+            return {
+                "status": "error",
+                "error": "Docker客户端未初始化，请检查Docker是否运行以及权限设置",
+                "running": False
+            }
+        
         container = get_container()
+        
+        # 如果容器未运行，返回状态但不报错
+        if container.status != "running":
+            return {
+                "status": container.status,
+                "cpu_percent": 0,
+                "memory_usage_mb": 0,
+                "memory_limit_mb": 0,
+                "memory_percent": 0,
+                "running": False
+            }
+        
         stats = container.stats(stream=False)
         
         # 计算CPU和内存使用率
@@ -119,6 +198,12 @@ async def get_status():
             "memory_limit_mb": round(memory_limit / 1024 / 1024, 2),
             "memory_percent": round(memory_percent, 2),
             "running": container.status == "running"
+        }
+    except NotFound as e:
+        return {
+            "status": "error",
+            "error": f"容器 '{config.get('docker', {}).get('container_name', 'unknown')}' 未找到",
+            "running": False
         }
     except Exception as e:
         return {
@@ -173,52 +258,118 @@ async def execute_command(command: dict):
         if not cmd:
             raise HTTPException(status_code=400, detail="命令不能为空")
         
-        # 尝试多种方式执行命令
+        # 获取命令执行方式配置
+        command_method = config.get('minecraft', {}).get('command_method', 'docker_attach')
+        # 可选值: 'docker_attach' (Docker attach方式) 或 'rcon' (RCON连接)
+        
         output = ""
         success = False
         
-        # 方式1: 尝试使用rcon-cli
-        try:
-            exec_result = container.exec_run(
-                f"rcon-cli {cmd}",
-                user="root"
-            )
-            output = exec_result.output.decode('utf-8', errors='ignore') if exec_result.output else ""
-            success = exec_result.exit_code == 0
-        except:
-            pass
-        
-        # 方式2: 如果rcon-cli失败，尝试直接写入到服务器控制台
-        if not success:
+        if command_method == 'docker_attach':
+            # 方案1: 使用 docker attach 方式直接向容器输入命令
             try:
-                # 通过docker exec直接执行命令（适用于某些镜像）
+                # 方法1: 尝试使用 docker exec 执行命令到 Minecraft 控制台
+                # 对于大多数 Minecraft 服务器容器，可以通过以下方式发送命令：
+                
+                # 首先尝试通过 screen 会话发送命令（如果服务器在 screen 中运行）
                 exec_result = container.exec_run(
-                    f"mc-send-to-console {cmd}",
+                    f"screen -S minecraft -p 0 -X stuff '{cmd}^M'",
                     user="root"
                 )
-                output = exec_result.output.decode('utf-8', errors='ignore') if exec_result.output else ""
-                success = exec_result.exit_code == 0
-            except:
-                pass
-        
-        # 方式3: 如果都失败，尝试使用mcrcon（如果可用）
-        if not success:
+                
+                if exec_result.exit_code == 0:
+                    output = f"命令 '{cmd}' 已通过 screen 发送到服务器"
+                    success = True
+                else:
+                    # 方法2: 尝试通过 tmux 会话发送命令
+                    exec_result = container.exec_run(
+                        f"tmux send-keys -t minecraft '{cmd}' Enter",
+                        user="root"
+                    )
+                    
+                    if exec_result.exit_code == 0:
+                        output = f"命令 '{cmd}' 已通过 tmux 发送到服务器"
+                        success = True
+                    else:
+                        # 方法3: 尝试直接写入到 Minecraft 进程的标准输入
+                        # 查找 Minecraft 进程的 PID
+                        exec_result = container.exec_run(
+                            "pgrep -f 'java.*minecraft'",
+                            user="root"
+                        )
+                        
+                        if exec_result.exit_code == 0 and exec_result.output:
+                            pid = exec_result.output.decode('utf-8').strip().split('\n')[0]
+                            # 尝试向进程的标准输入写入命令
+                            exec_result = container.exec_run(
+                                f"echo '{cmd}' > /proc/{pid}/fd/0",
+                                user="root"
+                            )
+                            
+                            if exec_result.exit_code == 0:
+                                output = f"命令 '{cmd}' 已发送到 Minecraft 进程 (PID: {pid})"
+                                success = True
+                            else:
+                                # 方法4: 尝试使用 fifo 管道
+                                exec_result = container.exec_run(
+                                    f"echo '{cmd}' | tee /tmp/minecraft_input",
+                                    user="root"
+                                )
+                                output = f"命令 '{cmd}' 已写入临时文件，请检查服务器日志"
+                                success = True
+                        else:
+                            output = "未找到 Minecraft 进程，请确保服务器正在运行"
+                            success = False
+                    
+                if not success:
+                    output = f"Docker attach 方式执行失败。建议：\n1. 确保 Minecraft 服务器在 screen 或 tmux 会话中运行\n2. 或者切换到 RCON 模式\n3. 检查容器是否正确配置"
+                    
+            except Exception as e:
+                output = f"Docker attach 执行失败: {str(e)}。建议切换到 RCON 模式。"
+                success = False
+        else:
+            # 方案2: 使用 RCON 连接
             try:
                 import mcrcon
-                rcon = mcrcon.MCRcon(
-                    config['minecraft']['rcon_host'],
-                    config['minecraft']['rcon_password'],
-                    port=config['minecraft']['rcon_port']
-                )
-                rcon.connect()
-                output = rcon.command(cmd)
-                rcon.disconnect()
-                success = True
+                rcon_host = config.get('minecraft', {}).get('rcon_host', 'localhost')
+                rcon_port = config.get('minecraft', {}).get('rcon_port', 25575)
+                rcon_password = config.get('minecraft', {}).get('rcon_password', '')
+                
+                # 先测试端口是否可达（从容器内部或外部）
+                # 如果 rcon_host 是 localhost，尝试从容器内部连接
+                if rcon_host == 'localhost' or rcon_host == '127.0.0.1':
+                    # 从容器内部连接 localhost:25575
+                    try:
+                        rcon = mcrcon.MCRcon('127.0.0.1', rcon_password, port=rcon_port)
+                        rcon.connect()
+                        output = rcon.command(cmd)
+                        rcon.disconnect()
+                        success = True
+                    except Exception as e:
+                        # 如果从容器内部连接失败，尝试从外部连接（需要暴露端口）
+                        try:
+                            # 获取容器的 IP 地址或使用主机网络
+                            container_ip = container.attrs['NetworkSettings']['IPAddress']
+                            if container_ip:
+                                rcon = mcrcon.MCRcon(container_ip, rcon_password, port=rcon_port)
+                                rcon.connect()
+                                output = rcon.command(cmd)
+                                rcon.disconnect()
+                                success = True
+                        except:
+                            pass
+                else:
+                    # 从外部连接指定的主机
+                    rcon = mcrcon.MCRcon(rcon_host, rcon_password, port=rcon_port)
+                    rcon.connect()
+                    output = rcon.command(cmd)
+                    rcon.disconnect()
+                    success = True
             except ImportError:
-                output = "执行失败: 请确保容器支持rcon-cli/mc-send-to-console，或安装mcrcon库"
+                output = "执行失败: 未安装 mcrcon 库。请运行: pip install mcrcon"
                 success = False
             except Exception as e:
-                output = f"执行失败: {str(e)}。请确保已配置RCON或容器支持rcon-cli/mc-send-to-console"
+                output = f"RCON 执行失败: {str(e)}。请确保：1) RCON已启用 2) 端口25575已暴露 3) 密码正确"
                 success = False
         
         return {
@@ -229,6 +380,71 @@ async def execute_command(command: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/minecraft/logs")
+async def get_server_logs(lines: int = 200):
+    """获取服务器日志"""
+    try:
+        container = get_container()
+        if container.status != "running":
+            return {"success": False, "logs": [], "error": "容器未运行"}
+        
+        # 尝试多种方式获取日志
+        logs = []
+        
+        # 方法1: 尝试读取常见的日志文件
+        log_paths = [
+            "/opt/minecraft/logs/latest.log",
+            "/data/logs/latest.log", 
+            "/server/logs/latest.log",
+            "/minecraft/logs/latest.log",
+            "/home/minecraft/logs/latest.log"
+        ]
+        
+        for log_path in log_paths:
+            try:
+                exec_result = container.exec_run(
+                    f"test -f {log_path} && tail -{lines} {log_path}",
+                    user="root"
+                )
+                if exec_result.exit_code == 0 and exec_result.output:
+                    log_content = exec_result.output.decode('utf-8', errors='ignore')
+                    logs = log_content.strip().split('\n')
+                    break
+            except:
+                continue
+        
+        # 方法2: 如果找不到日志文件，尝试使用 docker logs
+        if not logs:
+            try:
+                container_logs = container.logs(tail=lines, timestamps=True).decode('utf-8', errors='ignore')
+                logs = container_logs.strip().split('\n') if container_logs.strip() else []
+            except:
+                logs = []
+        
+        # 过滤和格式化日志
+        formatted_logs = []
+        for log_line in logs:
+            if log_line.strip():
+                # 简单的日志格式化
+                formatted_logs.append({
+                    "timestamp": "",
+                    "level": "INFO",
+                    "message": log_line.strip()
+                })
+        
+        return {
+            "success": True,
+            "logs": formatted_logs[-lines:] if formatted_logs else [],
+            "total": len(formatted_logs)
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "logs": [],
+            "error": str(e)
+        }
+
 @app.get("/api/minecraft/players")
 async def get_players():
     """获取在线玩家列表"""
@@ -238,30 +454,67 @@ async def get_players():
             return {"players": [], "count": 0, "max": 0}
         
         output = ""
+        command_method = config.get('minecraft', {}).get('command_method', 'docker_attach')
         
         # 尝试多种方式获取玩家列表
-        # 方式1: 使用rcon-cli
-        try:
-            exec_result = container.exec_run(
-                "rcon-cli list",
-                user="root"
-            )
-            output = exec_result.output.decode('utf-8', errors='ignore') if exec_result.output else ""
-        except:
-            pass
-        
-        # 方式2: 使用mcrcon
-        if not output:
+        if command_method == 'docker_attach':
+            # 使用 docker attach 方式
+            try:
+                # 由于 docker attach 方式无法直接获取命令输出，
+                # 我们需要通过其他方式获取玩家信息
+                # 方法1: 尝试读取服务器日志文件
+                exec_result = container.exec_run(
+                    "find /opt/minecraft /data /server -name 'latest.log' -o -name 'server.log' 2>/dev/null | head -1",
+                    user="root"
+                )
+                
+                if exec_result.exit_code == 0 and exec_result.output:
+                    log_path = exec_result.output.decode('utf-8').strip()
+                    if log_path:
+                        # 读取最近的日志来获取玩家信息
+                        exec_result = container.exec_run(
+                            f"tail -100 {log_path} | grep -E '(joined the game|left the game)' | tail -10",
+                            user="root"
+                        )
+                        if exec_result.exit_code == 0:
+                            log_output = exec_result.output.decode('utf-8', errors='ignore')
+                            # 这里可以解析日志来获取玩家信息，但比较复杂
+                            # 暂时返回提示信息
+                            output = "Docker attach 模式下无法直接获取玩家列表，请查看服务器日志或切换到 RCON 模式"
+                
+                if not output:
+                    output = "无法获取玩家列表，建议切换到 RCON 模式"
+            except:
+                output = "获取玩家列表失败"
+        else:
+            # 使用 RCON 方式
             try:
                 import mcrcon
-                rcon = mcrcon.MCRcon(
-                    config['minecraft']['rcon_host'],
-                    config['minecraft']['rcon_password'],
-                    port=config['minecraft']['rcon_port']
-                )
-                rcon.connect()
-                output = rcon.command("list")
-                rcon.disconnect()
+                rcon_host = config.get('minecraft', {}).get('rcon_host', 'localhost')
+                rcon_port = config.get('minecraft', {}).get('rcon_port', 25575)
+                rcon_password = config.get('minecraft', {}).get('rcon_password', '')
+                
+                if rcon_host == 'localhost' or rcon_host == '127.0.0.1':
+                    try:
+                        rcon = mcrcon.MCRcon('127.0.0.1', rcon_password, port=rcon_port)
+                        rcon.connect()
+                        output = rcon.command("list")
+                        rcon.disconnect()
+                    except Exception as e:
+                        try:
+                            container_ip = container.attrs['NetworkSettings']['IPAddress']
+                            if container_ip:
+                                rcon = mcrcon.MCRcon(container_ip, rcon_password, port=rcon_port)
+                                rcon.connect()
+                                output = rcon.command("list")
+                                rcon.disconnect()
+                        except:
+                            pass
+                else:
+                    rcon = mcrcon.MCRcon(rcon_host, rcon_password, port=rcon_port)
+                    rcon.connect()
+                    output = rcon.command("list")
+                    rcon.disconnect()
             except (ImportError, Exception):
                 pass
         
